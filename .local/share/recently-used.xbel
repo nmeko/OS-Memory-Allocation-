@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbel version="1.0"
+      xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"
+      xmlns:mime="http://www.freedesktop.org/standards/shared-mime-info"
+>
+  <bookmark href="file:///home/m325noel/scripts/os%20hw2" added="2026-03-02T08:09:12.680160Z" modified="2026-03-02T08:09:12.680196Z" visited="2026-03-02T08:09:12.680169Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="inode/directory"/>
+        <bookmark:applications>
+          <bookmark:application name="code" exec="&apos;code %u&apos;" modified="2026-03-02T08:09:12.680172Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/m325noel/scripts/os%20hw2/osHw2.cpp" added="2026-03-02T08:21:25.385993Z" modified="2026-03-02T08:21:25.386022Z" visited="2026-03-02T08:21:25.385994Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="text/x-c++src"/>
+        <bookmark:applications>
+          <bookmark:application name="code" exec="&apos;code %u&apos;" modified="2026-03-02T08:21:25.385998Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/m325noel/SE--assignment2" added="2026-03-17T19:55:37.950472Z" modified="2026-03-17T19:55:37.950501Z" visited="2026-03-17T19:55:37.950474Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="inode/directory"/>
+        <bookmark:applications>
+          <bookmark:application name="code" exec="&apos;code %u&apos;" modified="2026-03-17T19:55:37.950476Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/m325noel/SE--assignment2/hello.py" added="2026-03-17T20:01:13.706826Z" modified="2026-03-17T20:01:13.706886Z" visited="2026-03-17T20:01:13.706853Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="text/x-python"/>
+        <bookmark:applications>
+          <bookmark:application name="code" exec="&apos;code %u&apos;" modified="2026-03-17T20:01:13.706861Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/m325noel/Analysis%20of%20Algorithms" added="2026-03-31T00:48:12.203587Z" modified="2026-03-31T20:12:45.709325Z" visited="2026-03-31T00:48:12.203590Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="inode/directory"/>
+        <bookmark:applications>
+          <bookmark:application name="code" exec="&apos;code %u&apos;" modified="2026-03-31T20:12:45.709320Z" count="5"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+</xbel>

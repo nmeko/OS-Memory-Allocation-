@@ -1,0 +1,19 @@
+# VS Code
+.vscode/
+.cache/
+.config/
+
+# Compiled files
+*.o
+*.out
+*.exe
+
+# Large installers
+*.run
+
+# C++ build
+build/
+bin/
+
+# OS files
+.DS_Store

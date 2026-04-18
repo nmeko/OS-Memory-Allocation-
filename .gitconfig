@@ -1,0 +1,7 @@
+[user]
+	name = Noel Mekogue
+	email = nmekogue@pvamu.edu
+[credential]
+	helper = store
+[pull]
+	rebase = false
