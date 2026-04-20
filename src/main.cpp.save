@@ -1,0 +1,248 @@
+#include <iostream>
+#include <vector>
+#include <cstdlib>
+#include <ctime>
+#include <chrono>
+#include <fstream>
+
+using namespace std;
+
+struct Block {
+    size_t size;
+    bool free;
+    int id;
+};
+
+class Heap {
+private:
+    vector<Block> blocks;
+    vector<vector<int>> freeLists;
+    int nextId = 1;
+    size_t totalHeapSize;
+
+public:
+    Heap(size_t heapSizeMB) {
+        totalHeapSize = heapSizeMB * 1024 * 1024;
+        blocks.push_back({totalHeapSize, true, 0});
+        freeLists.resize(5);
+        freeLists[4].push_back(0);
+    }
+
+    int getClass(size_t size) {
+        if (size <= 32) return 0;
+        if (size <= 64) return 1;
+        if (size <= 128) return 2;
+        if (size <= 256) return 3;
+        return 4;
+    }
+
+    void rebuildFreeLists() {
+        for (auto &list : freeLists) list.clear();
+        for (int i = 0; i < blocks.size(); i++)
+            if (blocks[i].free)
+                freeLists[getClass(blocks[i].size)].push_back(i);
+    }
+
+    void coalesce() {
+        for (int i = 0; i < blocks.size() - 1; i++) {
+            if (blocks[i].free && blocks[i+1].free) {
+                blocks[i].size += blocks[i+1].size;
+                blocks.erase(blocks.begin() + i + 1);
+                i--;
+            }
+        }
+        rebuildFreeLists();
+	logStep("FREE", id, 0);
+exportHeapSnapshot();
+    }
+
+    int firstFit(size_t size) {
+        for (int i = 0; i < blocks.size(); i++) {
+            if (blocks[i].free && blocks[i].size >= size) {
+                size_t rem = blocks[i].size - size;
+                blocks[i] = {size, false, nextId++};
+               if (rem > 0)
+                    blocks.insert(blocks.begin() + i + 1, {rem, true, 0});
+                rebuildFreeLists();
+		exportHeapSnapshot();
+logStep("ALLOC_FIRST_FIT", blocks[i].id, size);
+                return blocks[i].id;
+            }
+        }
+        return -1;
+    }
+
+    int bestFit(size_t size) {
+        int best = -1;
+        for (int i = 0; i < blocks.size(); i++) {
+            if (blocks[i].free && blocks[i].size >= size)
+                if (best == -1 || blocks[i].size < blocks[best].size)
+                    best = i;
+        }
+        if (best == -1) return -1;
+
+        size_t rem = blocks[best].size - size;
+        blocks[best] = {size, false, nextId++};
+        if (rem > 0)
+            blocks.insert(blocks.begin() + best + 1, {rem, true, 0});
+
+        rebuildFreeLists();
+	exportHeapSnapshot();
+logStep("ALLOC_BEST_FIT", blocks[best].id, size);
+        return blocks[best].id;
+    }
+
+    int segregatedFit(size_t size) {
+        int cls = getClass(size);
+
+        for (int c = cls; c < freeLists.size(); c++) {
+            for (int idx : freeLists[c]) {
+                if (blocks[idx].size >= size) {
+                    size_t rem = blocks[idx].size - size;
+                    blocks[idx] = {size, false, nextId++};
+                    if (rem > 0)
+                        blocks.insert(blocks.begin() + idx + 1, {rem, true, 0});
+                    rebuildFreeLists();
+			exportHeapSnapshot();
+logStep("ALLOC_SEGREGATED", blocks[idx].id, size);
+                    return blocks[idx].id;
+                }
+            }
+        }
+        return -1;
+    }
+
+    double utilization() {
+        size_t used = 0;
+        for (auto &b : blocks)
+            if (!b.free) used += b.size;
+        return (double)used / totalHeapSize;
+    }
+
+    double externalFragmentation() {
+        size_t freeTotal = 0, largest = 0;
+        for (auto &b : blocks) {
+            if (b.free) {
+                freeTotal += b.size;
+                largest = max(largest, b.size);
+            }
+        }
+        if (freeTotal == 0) return 0;
+        return 1.0 - ((double)largest / freeTotal);
+    }
+
+    double internalFragmentation() {
+        size_t wasted = 0;
+        for (auto &b : blocks)
+            if (!b.free && b.size < 256)
+                wasted += (256 - b.size);
+        return (double)wasted / totalHeapSize;
+    }
+
+    void printStats() {
+        int used = 0, freeB = 0;
+        for (auto &b : blocks)
+            b.free ? freeB++ : used++;
+        cout << "\nUsed blocks: " << used << "\nFree blocks: " << freeB << endl;
+    }
+
+void exportHeapSnapshot() {
+    ofstream out("data/heap_snapshot.json");
+
+    out << "[\n";
+
+    for (size_t i = 0; i < blocks.size(); i++) {
+        out << "  {"
+            << "\"size\":" << blocks[i].size << ","
+            << "\"free\":" << (blocks[i].free ? "true" : "false")
+            << "}";
+
+        if (i != blocks.size() - 1) out << ",";
+        out << "\n";
+    }
+
+    out << "]";
+
+    out.close();
+}
+
+void logStep(string action, int id, size_t size) {
+    ofstream out("data/trace.json", ios::app);
+
+    out << "{"
+        << "\"action\":\"" << action << "\","
+        << "\"id\":" << id << ","
+        << "\"size\":" << size
+        << "}\n";
+
+    out.close();
+}
+};
+
+int main() {
+    srand(time(0));
+
+    size_t heapSize;
+    int strategy, ops;
+
+    cout << "Heap size (MB): ";
+    cin >> heapSize;
+
+    cout << "Strategy (1=First,2=Best,3=Seg): ";
+    cin >> strategy;
+
+    cout << "Operations: ";
+    cin >> ops;
+
+    Heap heap(heapSize);
+
+    auto start = chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < ops; i++) {
+        size_t size = rand() % 256 + 1;
+
+        if (strategy == 1) heap.firstFit(size);
+        else if (strategy == 2) heap.bestFit(size);
+        else heap.segregatedFit(size);
+    }
+
+    auto end = chrono::high_resolution_clock::now();
+
+    double customTime = chrono::duration<double, milli>(end - start).count();
+
+    vector<void*> ptrs;
+    auto start2 = chrono::high_resolution_clock::now();
+    for (int i = 0; i < ops; i++) {
+        void* p = malloc(rand()%256+1);
+        if (p) ptrs.push_back(p);
+    }
+    for (auto p : ptrs) free(p);
+    auto end2 = chrono::high_resolution_clock::now();
+
+    double mallocTime = chrono::duration<double, milli>(end2 - start2).count();
+
+    double util = heap.utilization();
+    double ext = heap.externalFragmentation();
+    double in = heap.internalFragmentation();
+
+    heap.printStats();
+
+    cout << "\nCustom Time: " << customTime;
+    cout << "\nMalloc Time: " << mallocTime;
+    cout << "\nUtilization: " << util;
+    cout << "\nExternal Frag: " << ext;
+    cout << "\nInternal Frag: " << in << endl;
+
+    ofstream out("data/results.json", ios::app);
+
+out << "{"
+    << "\"strategy\":" << strategy << ","
+    << "\"custom_time\":" << customTime << ","
+    << "\"malloc_time\":" << mallocTime << ","
+    << "\"utilization\":" << util << ","
+    << "\"external_frag\":" << ext << ","
+    << "\"internal_frag\":" << in
+    << "}\n";
+
+out.close();
+}

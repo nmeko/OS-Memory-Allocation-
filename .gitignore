@@ -1,0 +1,17 @@
+# Build
+*.o
+allocator
+
+# VS Code
+.vscode/
+.cache/
+*.ipch
+
+# OS junk
+.DS_Store
+
+# Large installers
+*.run
+
+# Results
+data/results.json

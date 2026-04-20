@@ -1,16 +1,77 @@
 <!DOCTYPE html>
 <html>
 <head>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <title>OS Memory Engine</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        body {
+            background: #0b0f19;
+            color: white;
+            font-family: Arial;
+            margin: 0;
+            padding: 0;
+        }
+
+        h1 {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .card {
+            background: #141b2d;
+            padding: 15px;
+            border-radius: 10px;
+        }
+
+        canvas {
+            background: white;
+            border-radius: 10px;
+        }
+    </style>
 </head>
+
 <body>
 
-<h2>Heap Metrics</h2>
-<canvas id="chart1"></canvas>
+<h1>OS Memory Engine Dashboard</h1>
 
-<h2>Performance</h2>
-<canvas id="chart2"></canvas>
+<div class="grid">
+
+    <div class="card">
+        <h3>Execution Time (3 Algorithms)</h3>
+        <canvas id="chart1"></canvas>
+    </div>
+
+    <div class="card">
+        <h3>Memory Utilization</h3>
+        <canvas id="chart2"></canvas>
+    </div>
+
+    <div class="card">
+        <h3>External Fragmentation</h3>
+        <canvas id="chart3"></canvas>
+    </div>
+
+    <div class="card">
+        <h3>Internal Fragmentation</h3>
+        <canvas id="chart4"></canvas>
+    </div>
+
+    <div class="card">
+        <h3>Custom vs Malloc/free</h3>
+        <canvas id="chart5"></canvas>
+    </div>
+
+</div>
 
 <script src="script.js"></script>
+
 </body>
 </html>
