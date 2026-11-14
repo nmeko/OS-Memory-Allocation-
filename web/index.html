@@ -49,6 +49,17 @@
   td { font-family: "JetBrains Mono", monospace; }
   .table-scroll { overflow-x: auto; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+  .run { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 14px; align-items: end; padding: 18px; margin-bottom: 18px; }
+  .run label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .run input { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: 600 15px "JetBrains Mono", monospace; }
+  .run input:focus { outline: 2px solid var(--first); outline-offset: 1px; }
+  .seed-row { display: flex; gap: 8px; }
+  .btn { border: 0; border-radius: 10px; padding: 11px 18px; font: 600 15px Inter, system-ui, sans-serif; cursor: pointer; background: var(--first); color: #fff; white-space: nowrap; }
+  .btn:disabled { opacity: .6; cursor: wait; }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .run-foot { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; color: var(--muted); font-size: 13px; }
+  .run-foot .btn { white-space: normal; text-align: left; }
+  @media (max-width: 760px) { .run { grid-template-columns: minmax(0, 1fr); } }
   #error { display: none; background: #3a1620; border: 1px solid #7a2b3d; padding: 16px; border-radius: 12px; margin-bottom: 18px; }
   #error code { font-family: "JetBrains Mono", monospace; }
   footer { margin-top: 32px; color: var(--muted); font-size: 13px; }
@@ -61,10 +72,33 @@
   <header>
     <div>
       <h1>OS Memory Engine <span>· allocator benchmark</span></h1>
-      <p class="sub">Three placement strategies replay the exact same random alloc/free workload on a simulated heap, then race the system's <code>malloc</code>/<code>free</code>.</p>
+      <p class="sub">Three placement strategies replay the exact same random alloc/free workload on a simulated heap, then race the system's <code>malloc</code>/<code>free</code>. Pick your own heap size, workload length and seed below.</p>
     </div>
-    <div class="meta" id="meta"><span class="chip">Loading results…</span></div>
+    <div class="meta" id="meta"></div>
   </header>
+
+  <form class="card run" id="run-form" aria-label="Run a simulation">
+    <div>
+      <label for="heap">Heap size (MB)</label>
+      <input id="heap" name="heap" type="number" min="1" max="64" step="1" value="10" required>
+    </div>
+    <div>
+      <label for="ops">Operations</label>
+      <input id="ops" name="ops" type="number" min="100" max="100000" step="100" value="20000" required>
+    </div>
+    <div>
+      <label for="seed">Seed (same seed = same workload)</label>
+      <div class="seed-row">
+        <input id="seed" name="seed" type="number" min="0" max="4294967295" step="1" value="42" required>
+        <button class="btn ghost" type="button" aria-label="Random seed">🎲</button>
+      </div>
+    </div>
+    <button class="btn" id="run-button" type="submit">Run simulation</button>
+    <div class="run-foot">
+      <span id="run-status" role="status" aria-live="polite">Running the default simulation…</span>
+      <button class="btn ghost" type="button" id="load-terminal">Load my terminal run (data/results.json)</button>
+    </div>
+  </form>
 
   <div id="error" role="alert">
     Couldn't load <code>data/results.json</code>. Run <code>./allocator</code> from the project root, then serve the folder with
@@ -102,6 +136,7 @@
     Built with C++17 and Chart.js · <a href="https://github.com/nmeko/OS-Memory-Allocation-">Source on GitHub</a>
   </footer>
 </div>
+<script src="allocator.js"></script>
 <script src="script.js"></script>
 </body>
 </html>

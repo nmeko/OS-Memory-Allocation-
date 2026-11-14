@@ -34,7 +34,9 @@ function renderKpis(d) {
   const cards = [
     ["Fastest strategy", fastest.name, ms(fastest.time_ms)],
     ["Least external fragmentation", leastFrag.name, pct(leastFrag.external_frag)],
-    ["malloc/free", ms(d.malloc_time_ms), `${(fastest.time_ms / d.malloc_time_ms).toFixed(1)}× faster than ${fastest.name}`],
+    d.malloc_time_ms == null
+      ? ["malloc/free", "Terminal only", "Browsers can't call malloc; run ./allocator to compare"]
+      : ["malloc/free", ms(d.malloc_time_ms), `${(fastest.time_ms / d.malloc_time_ms).toFixed(1)}× faster than ${fastest.name}`],
     ["Heap utilization", pct(s[0].utilization), "Same for all strategies: same workload"],
   ];
   document.getElementById("kpis").replaceChildren(
@@ -46,17 +48,20 @@ function renderKpis(d) {
   );
 }
 
+let charts = [];
 function renderCharts(d) {
+  charts.forEach((c) => c.destroy());
   const names = d.strategies.map((s) => s.name);
+  const withMalloc = d.malloc_time_ms != null;
   const options = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom" } } };
 
-  new Chart(document.getElementById("time"), {
+  const timeChart = new Chart(document.getElementById("time"), {
     type: "bar",
     data: {
-      labels: [...names, "malloc/free"],
+      labels: withMalloc ? [...names, "malloc/free"] : names,
       datasets: [{
         label: "Time (ms)",
-        data: [...d.strategies.map((s) => s.time_ms), d.malloc_time_ms],
+        data: [...d.strategies.map((s) => s.time_ms), ...(withMalloc ? [d.malloc_time_ms] : [])],
         backgroundColor: [...names.map((n) => COLORS[n]), color("--malloc")],
         borderRadius: 6,
       }],
@@ -64,7 +69,7 @@ function renderCharts(d) {
     options: { ...options, plugins: { legend: { display: false } }, scales: { y: { type: "logarithmic", title: { display: true, text: "ms (log scale)" } } } },
   });
 
-  new Chart(document.getElementById("frag"), {
+  const fragChart = new Chart(document.getElementById("frag"), {
     type: "bar",
     data: {
       labels: names,
@@ -75,6 +80,7 @@ function renderCharts(d) {
     },
     options: { ...options, scales: { y: { beginAtZero: true, ticks: { callback: (v) => `${v}%` } } } },
   });
+  charts = [timeChart, fragChart];
 }
 
 // Draws the heap as one strip; each allocated block is a red span at its true address and size.
@@ -106,10 +112,11 @@ function renderHeaps(d) {
     return { row, canvas, layout: s.layout };
   });
   container.replaceChildren(...rows.map((r) => r.row));
-  const draw = () => rows.forEach((r) => drawHeap(r.canvas, r.layout, heapBytes));
-  draw();
-  window.addEventListener("resize", draw);
+  redrawHeaps = () => rows.forEach((r) => drawHeap(r.canvas, r.layout, heapBytes));
+  redrawHeaps();
 }
+let redrawHeaps = () => {};
+window.addEventListener("resize", () => redrawHeaps());
 
 function renderTable(d) {
   const head = ["Strategy", "Time", "Utilization", "External frag", "Internal frag", "Failed allocs", "Blocks"];
@@ -127,27 +134,66 @@ function renderTable(d) {
     tr.append(first, ...[ms(s.time_ms), pct(s.utilization), pct(s.external_frag), pct(s.internal_frag), s.failed_allocs, s.blocks.toLocaleString()].map((v) => el("td", String(v))));
     tbody.append(tr);
   }
-  const mallocRow = el("tr");
-  mallocRow.append(el("td", "malloc/free"), el("td", ms(d.malloc_time_ms)), ...Array.from({ length: 5 }, () => el("td", "—")));
-  tbody.append(mallocRow);
+  if (d.malloc_time_ms != null) {
+    const mallocRow = el("tr");
+    mallocRow.append(el("td", "malloc/free"), el("td", ms(d.malloc_time_ms)), ...Array.from({ length: 5 }, () => el("td", "—")));
+    tbody.append(mallocRow);
+  }
   table.replaceChildren(thead, tbody);
 }
 
-// Relative path so the page works both locally and on GitHub Pages.
-fetch("../data/results.json")
-  .then((res) => {
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  })
-  .then((d) => {
-    renderMeta(d);
-    renderKpis(d);
-    renderCharts(d);
-    renderHeaps(d);
-    renderTable(d);
-  })
-  .catch((err) => {
-    console.error("Failed to load results:", err);
-    document.getElementById("error").style.display = "block";
-    document.getElementById("meta").replaceChildren();
-  });
+function render(d) {
+  document.getElementById("error").style.display = "none";
+  renderMeta(d);
+  renderKpis(d);
+  renderCharts(d);
+  renderHeaps(d);
+  renderTable(d);
+}
+
+const form = document.getElementById("run-form");
+const status = document.getElementById("run-status");
+const runButton = document.getElementById("run-button");
+
+// Run the simulation in the page with the visitor's own inputs.
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!form.reportValidity()) return;
+  const input = {
+    heapMb: Number(form.heap.value),
+    operations: Number(form.ops.value),
+    seed: Number(form.seed.value),
+  };
+  runButton.disabled = true;
+  status.textContent = `Running ${input.operations.toLocaleString()} operations on a ${input.heapMb} MB heap…`;
+  // Let the status message paint before the (synchronous) simulation starts.
+  setTimeout(() => {
+    const started = performance.now();
+    render(OSAllocator.simulate(input));
+    status.textContent = `Simulated in your browser in ${Math.round(performance.now() - started)} ms. Change the inputs and run again to compare.`;
+    runButton.disabled = false;
+  }, 30);
+});
+
+form.seed.nextElementSibling.addEventListener("click", () => {
+  form.seed.value = Math.floor(Math.random() * 100000);
+});
+
+// Show results written by the C++ program (./allocator writes data/results.json).
+document.getElementById("load-terminal").addEventListener("click", () => {
+  fetch("../data/results.json", { cache: "no-store" })
+    .then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    })
+    .then((d) => {
+      render(d);
+      status.textContent = "Showing data/results.json from the C++ program, including real malloc/free timing.";
+    })
+    .catch((err) => {
+      console.error("Failed to load results:", err);
+      document.getElementById("error").style.display = "block";
+    });
+});
+
+form.requestSubmit();

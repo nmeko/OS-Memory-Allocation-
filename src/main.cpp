@@ -255,6 +255,25 @@ int selfTest() {
     return 0;
 }
 
+// Asks for a number in [lo, hi]; Enter keeps the default, anything invalid is asked again.
+size_t ask(const string& prompt, size_t def, size_t lo, size_t hi) {
+    while (true) {
+        cout << prompt << " [" << def << "]: " << flush;
+        string line;
+        if (!getline(cin, line)) return def;  // end of input: keep the default
+        line.erase(0, line.find_first_not_of(" \t"));
+        line.erase(line.find_last_not_of(" \t\r") + 1);
+        if (line.empty()) return def;
+        try {
+            size_t pos = 0;
+            if (line[0] == '-') throw invalid_argument(line);
+            unsigned long long v = stoull(line, &pos);
+            if (pos == line.size() && v >= lo && v <= hi) return size_t(v);
+        } catch (const exception&) {}
+        cout << "  Please enter a whole number from " << lo << " to " << hi << ".\n";
+    }
+}
+
 void usage() {
     cerr << "usage: allocator [--heap MB] [--ops N] [--seed S] [--out DIR] [--self-test]\n"
             "  defaults: --heap 10 --ops 50000 --seed 42 --out data\n";
@@ -279,6 +298,12 @@ int main(int argc, char** argv) {
             else { usage(); return 2; }
         } catch (const exception&) { cerr << "error: invalid value for " << a << ": " << v << "\n"; return 2; }
     }
+    if (argc == 1) {  // no options: ask, like the original interactive version
+        cout << "OS Memory Engine: press Enter to keep a default.\n";
+        heapMb = ask("Heap size in MB (1-4096)", heapMb, 1, 4096);
+        opCount = ask("Number of operations (1-10000000)", opCount, 1, 10000000);
+        seed = unsigned(ask("Random seed (same seed = same workload)", seed, 0, 4294967295u));
+    }
     if (heapMb < 1 || heapMb > 4096 || opCount < 1 || opCount > 10000000) {
         cerr << "error: --heap must be 1-4096 MB and --ops 1-10000000\n";
         return 2;
@@ -296,5 +321,6 @@ int main(int argc, char** argv) {
         printf("%-15s %10.2f %7.1f%% %9.1f%% %9.1f%% %8zu\n", r.name.c_str(), r.ms, r.util * 100,
                r.extFrag * 100, r.intFrag * 100, r.failed);
     printf("%-15s %10.2f\n\nWrote %s/results.json\n", "malloc/free", mallocMs, outDir.c_str());
+    printf("To view it: python3 -m http.server 8000, open http://localhost:8000/web/ and click \"Load my terminal run\".\n");
     return 0;
 }

@@ -6,7 +6,7 @@ All three strategies replay the **same seeded workload** of mixed allocations an
 
 ![CI](https://github.com/nmeko/OS-Memory-Allocation-/actions/workflows/ci.yml/badge.svg)
 
-**Live dashboard:** https://nmeko.github.io/OS-Memory-Allocation-/ (free, in the browser, nothing to install)
+**Try it:** https://nmeko.github.io/OS-Memory-Allocation-/. Enter a heap size, number of operations and seed, and the simulation runs right in your browser. Free, nothing to install.
 
 ## Sample results
 
@@ -36,17 +36,19 @@ Requirements: `g++` with C++17 and Python 3 (only to serve the dashboard). On Wi
 
 ```bash
 g++ -std=c++17 -O2 src/main.cpp -o allocator
-./allocator                                 # 10 MB heap, 50,000 ops, seed 42
+./allocator                                 # asks for heap size, operations and seed
 ./allocator --heap 64 --ops 200000 --seed 7 # custom run
 ./allocator --self-test                     # check heap invariants for every strategy
 ```
 
-Results go to `data/results.json`. To view the dashboard:
+Results go to `data/results.json`. To view them on the dashboard:
 
 ```bash
 python3 -m http.server 8000
-# open http://localhost:8000/web/
+# open http://localhost:8000/web/ and click "Load my terminal run"
 ```
+
+The dashboard can also run the simulation itself: `web/allocator.js` is a JavaScript port of the same heap model, strategies and workload shape, used when you press **Run simulation**. Browsers can't call `malloc`, so the malloc/free comparison appears only for terminal runs.
 
 The repository includes a sample `data/results.json`, so the dashboard also works on GitHub Pages without compiling anything. To publish it: **Settings → Pages → Deploy from a branch → `main` / root**.
 
@@ -55,10 +57,11 @@ The repository includes a sample `data/results.json`, so the dashboard also work
 ```text
 src/main.cpp       simulator, benchmark and self-test
 web/index.html     dashboard page
-web/script.js      charts, heap layout strips and metrics table
+web/script.js      form, charts, heap layout strips and metrics table
+web/allocator.js   in-browser port of the simulator
 data/results.json  latest run (committed sample)
 ```
 
 ## Testing
 
-`--self-test` runs 20,000 mixed operations per strategy and checks that blocks always tile the heap exactly, no two free blocks are adjacent, the free lists match the heap, and freeing everything coalesces back to a single block. CI builds with AddressSanitizer and UBSan and runs it on every push.
+`--self-test` runs 20,000 mixed operations per strategy and checks that blocks always tile the heap exactly, no two free blocks are adjacent, the free lists match the heap, and freeing everything coalesces back to a single block. `node --test tests/allocator.test.js` runs the same checks against the browser port. CI builds with AddressSanitizer and UBSan and runs both on every push.

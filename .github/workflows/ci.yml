@@ -15,3 +15,5 @@ jobs:
         run: ./allocator_dbg --self-test
       - name: Benchmark smoke run
         run: g++ -std=c++17 -O2 src/main.cpp -o allocator && ./allocator --ops 5000 --out /tmp/out
+      - name: Browser engine tests
+        run: node --test tests/allocator.test.js
