@@ -14,4 +14,5 @@ allocator
 *.run
 
 # Results
-data/results.json
+# data/results.json is committed as demo data for the dashboard
+allocator_dbg

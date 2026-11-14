@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with sanitizers
+        run: g++ -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined src/main.cpp -o allocator_dbg
+      - name: Self-test (heap invariants for every strategy)
+        run: ./allocator_dbg --self-test
+      - name: Benchmark smoke run
+        run: g++ -std=c++17 -O2 src/main.cpp -o allocator && ./allocator --ops 5000 --out /tmp/out
