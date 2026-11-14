@@ -6,6 +6,8 @@ All three strategies replay the **same seeded workload** of mixed allocations an
 
 ![CI](https://github.com/nmeko/OS-Memory-Allocation-/actions/workflows/ci.yml/badge.svg)
 
+**Live dashboard:** https://nmeko.github.io/OS-Memory-Allocation-/ (free, in the browser, nothing to install)
+
 ## Sample results
 
 10 MB heap, 50,000 operations, seed 42:
@@ -46,7 +48,7 @@ python3 -m http.server 8000
 # open http://localhost:8000/web/
 ```
 
-The repository includes a sample `data/results.json`, so the dashboard also works on GitHub Pages without compiling anything.
+The repository includes a sample `data/results.json`, so the dashboard also works on GitHub Pages without compiling anything. To publish it: **Settings → Pages → Deploy from a branch → `main` / root**.
 
 ## Project structure
 
