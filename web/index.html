@@ -1,77 +1,107 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>OS Memory Engine</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
-    <style>
-        body {
-            background: #0b0f19;
-            color: white;
-            font-family: Arial;
-            margin: 0;
-            padding: 0;
-        }
-
-        h1 {
-            text-align: center;
-            padding: 20px;
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            padding: 20px;
-        }
-
-        .card {
-            background: #141b2d;
-            padding: 15px;
-            border-radius: 10px;
-        }
-
-        canvas {
-            background: white;
-            border-radius: 10px;
-        }
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OS Memory Engine · Allocator Benchmark</title>
+<meta name="description" content="Compare first fit, best fit and segregated fit memory allocators against malloc/free on the same workload.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0f19; --panel: #121a2b; --line: #22304a; --text: #e6ebf5; --muted: #8b97ad;
+    --first: #5b8def; --best: #22c3a6; --seg: #f2a541; --malloc: #9aa5b8;
+    --used: #e5546c; --free: #1f3a33;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 Inter, system-ui, sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 16px 64px; }
+  header { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; justify-content: space-between; margin-bottom: 28px; }
+  h1 { margin: 0; font-size: clamp(24px, 4vw, 34px); letter-spacing: -.02em; }
+  h1 span { color: var(--muted); font-weight: 500; }
+  .sub { margin: 6px 0 0; color: var(--muted); max-width: 640px; }
+  .meta { font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .kpi, .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+  .kpi { padding: 16px 18px; }
+  .kpi .label { color: var(--muted); font-size: 13px; }
+  .kpi .value { font-size: 26px; font-weight: 700; margin-top: 2px; }
+  .kpi .note { color: var(--muted); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .card { padding: 18px; }
+  .card h2 { margin: 0 0 2px; font-size: 16px; }
+  .card p { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+  .chart { position: relative; height: 240px; }
+  .wide { grid-column: 1 / -1; }
+  .heap-row { margin-top: 14px; }
+  .heap-row .name { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .heap-row .name b { color: var(--text); }
+  canvas.heap { width: 100%; height: 34px; border-radius: 8px; display: block; background: var(--free); }
+  .legend { display: flex; gap: 16px; font-size: 13px; color: var(--muted); }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: right; padding: 10px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; }
+  td { font-family: "JetBrains Mono", monospace; }
+  .table-scroll { overflow-x: auto; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+  #error { display: none; background: #3a1620; border: 1px solid #7a2b3d; padding: 16px; border-radius: 12px; margin-bottom: 18px; }
+  #error code { font-family: "JetBrains Mono", monospace; }
+  footer { margin-top: 32px; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--text); }
+  @media (max-width: 760px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+</style>
 </head>
-
 <body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>OS Memory Engine <span>· allocator benchmark</span></h1>
+      <p class="sub">Three placement strategies replay the exact same random alloc/free workload on a simulated heap, then race the system's <code>malloc</code>/<code>free</code>.</p>
+    </div>
+    <div class="meta" id="meta"><span class="chip">Loading results…</span></div>
+  </header>
 
-<h1>OS Memory Engine Dashboard</h1>
+  <div id="error" role="alert">
+    Couldn't load <code>data/results.json</code>. Run <code>./allocator</code> from the project root, then serve the folder with
+    <code>python3 -m http.server 8000</code> and open <code>http://localhost:8000/web/</code>.
+  </div>
 
-<div class="grid">
+  <section class="kpis" id="kpis" aria-label="Headline results"></section>
 
+  <section class="grid">
     <div class="card">
-        <h3>Execution Time (3 Algorithms)</h3>
-        <canvas id="chart1"></canvas>
+      <h2>Execution time</h2>
+      <p>Wall-clock time to replay the workload (lower is better).</p>
+      <div class="chart"><canvas id="time" aria-label="Execution time chart" role="img"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Fragmentation</h2>
+      <p>External: free memory not in the largest hole. Internal: bytes lost inside allocated blocks.</p>
+      <div class="chart"><canvas id="frag" aria-label="Fragmentation chart" role="img"></canvas></div>
     </div>
 
-    <div class="card">
-        <h3>Memory Utilization</h3>
-        <canvas id="chart2"></canvas>
+    <div class="card wide">
+      <h2>Final heap layout</h2>
+      <p>Each strip is the whole heap from address 0 to the end, after the last operation.</p>
+      <div class="legend"><span><i style="background:var(--used)"></i>Allocated</span><span><i style="background:var(--free)"></i>Free</span></div>
+      <div id="heaps"></div>
     </div>
 
-    <div class="card">
-        <h3>External Fragmentation</h3>
-        <canvas id="chart3"></canvas>
+    <div class="card wide">
+      <h2>All metrics</h2>
+      <div class="table-scroll"><table id="table"></table></div>
     </div>
+  </section>
 
-    <div class="card">
-        <h3>Internal Fragmentation</h3>
-        <canvas id="chart4"></canvas>
-    </div>
-
-    <div class="card">
-        <h3>Custom vs Malloc/free</h3>
-        <canvas id="chart5"></canvas>
-    </div>
-
+  <footer>
+    Built with C++17 and Chart.js · <a href="https://github.com/nmeko/OS-Memory-Allocation-">Source on GitHub</a>
+  </footer>
 </div>
-
 <script src="script.js"></script>
-
 </body>
 </html>

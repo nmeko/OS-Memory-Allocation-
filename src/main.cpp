@@ -1,312 +1,300 @@
-#include <iostream>
-#include <vector>
-#include <cstdlib>
-#include <ctime>
-#include <chrono>
-#include <fstream>
+// OS Memory Engine: replays one alloc/free workload against three placement
+// strategies (first fit, best fit, segregated fit) and against malloc/free,
+// then writes metrics and final heap layouts for the web dashboard.
 #include <algorithm>
+#include <cassert>
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <random>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 using namespace std;
 
-// ==============================
-// BLOCK STRUCTURE
-// ==============================
+enum class Strategy { FirstFit, BestFit, Segregated };
+const vector<pair<Strategy, string>> STRATEGIES = {
+    {Strategy::FirstFit, "First Fit"},
+    {Strategy::BestFit, "Best Fit"},
+    {Strategy::Segregated, "Segregated Fit"},
+};
+
+constexpr size_t ALIGN = 8;       // every block is a multiple of 8 bytes
+constexpr size_t MIN_SPLIT = 16;  // smaller leftovers stay inside the block (internal fragmentation)
+constexpr int NUM_CLASSES = 32;   // segregated size classes: [2^k, 2^(k+1))
+
+size_t alignUp(size_t n) { return (n + ALIGN - 1) & ~(ALIGN - 1); }
+int sizeClass(size_t n) { int c = 0; while (c < NUM_CLASSES - 1 && (size_t(2) << c) <= n) c++; return c; }
+
 struct Block {
     size_t size;
+    size_t requested;  // bytes the caller asked for (0 when free)
     bool free;
-    int id;
 };
 
-// ==============================
-// HEAP SIMULATOR
-// ==============================
+// A simulated heap: blocks keyed by address so neighbors are cheap to find,
+// plus per-size-class free lists used by segregated fit.
 class Heap {
-private:
-    vector<Block> blocks;
+    size_t total;
+    map<size_t, Block> blocks;               // address -> block, contiguous, covers [0, total)
+    vector<set<size_t>> freeLists;           // size class -> addresses of free blocks
+    unordered_map<int, size_t> live;         // allocation id -> address
     int nextId = 1;
-    size_t totalHeapSize = 0;
+
+    void addFree(size_t addr) { freeLists[sizeClass(blocks[addr].size)].insert(addr); }
+    void removeFree(size_t addr) { freeLists[sizeClass(blocks[addr].size)].erase(addr); }
+
+    long findFirst(size_t need) {
+        for (auto& [addr, b] : blocks) if (b.free && b.size >= need) return long(addr);
+        return -1;
+    }
+    long findBest(size_t need) {
+        long best = -1;
+        for (auto& [addr, b] : blocks)
+            if (b.free && b.size >= need && (best < 0 || b.size < blocks[size_t(best)].size)) best = long(addr);
+        return best;
+    }
+    // Look only in the request's size class and up, so small requests never walk large blocks.
+    long findSegregated(size_t need) {
+        for (int c = sizeClass(need); c < NUM_CLASSES; c++)
+            for (size_t addr : freeLists[c]) if (blocks[addr].size >= need) return long(addr);
+        return -1;
+    }
 
 public:
-    Heap(size_t heapSizeMB) {
-        totalHeapSize = heapSizeMB * 1024 * 1024;
-        blocks.push_back({totalHeapSize, true, 0});
+    explicit Heap(size_t bytes) : total(bytes), freeLists(NUM_CLASSES) {
+        blocks[0] = {total, 0, true};
+        addFree(0);
     }
 
-    // ==========================
-    // COALESCE (KEY IMPROVEMENT)
-    // ==========================
-    void coalesce() {
-        for (size_t i = 0; i < blocks.size() - 1; i++) {
-            if (blocks[i].free && blocks[i + 1].free) {
-                blocks[i].size += blocks[i + 1].size;
-                blocks.erase(blocks.begin() + i + 1);
-                i--;
+    // Returns an allocation id, or -1 when no free block is large enough.
+    int allocate(size_t request, Strategy s) {
+        if (request == 0) return -1;
+        size_t need = alignUp(request);
+        long found = s == Strategy::FirstFit ? findFirst(need)
+                   : s == Strategy::BestFit  ? findBest(need)
+                                             : findSegregated(need);
+        if (found < 0) return -1;
+        size_t addr = size_t(found);
+        removeFree(addr);
+        Block& b = blocks[addr];
+        if (b.size - need >= MIN_SPLIT) {
+            blocks[addr + need] = {b.size - need, 0, true};
+            addFree(addr + need);
+            b.size = need;
+        }
+        b.free = false;
+        b.requested = request;
+        live[nextId] = addr;
+        return nextId++;
+    }
+
+    // Frees an allocation and merges it with free neighbors. Unknown ids are ignored.
+    void release(int id) {
+        auto it = live.find(id);
+        if (it == live.end()) return;
+        size_t addr = it->second;
+        live.erase(it);
+        blocks[addr].free = true;
+        blocks[addr].requested = 0;
+
+        auto next = blocks.find(addr + blocks[addr].size);
+        if (next != blocks.end() && next->second.free) {
+            removeFree(next->first);
+            blocks[addr].size += next->second.size;
+            blocks.erase(next);
+        }
+        auto cur = blocks.find(addr);
+        if (cur != blocks.begin()) {
+            auto prev = std::prev(cur);
+            if (prev->second.free) {
+                removeFree(prev->first);
+                prev->second.size += cur->second.size;
+                blocks.erase(cur);
+                addr = prev->first;
             }
         }
+        addFree(addr);
     }
 
-    // ==========================
-    // UTILIZATION
-    // ==========================
-    double utilization() {
+    double utilization() const {  // share of the heap handed out to callers
         size_t used = 0;
-        for (auto &b : blocks)
-            if (!b.free) used += b.size;
-        return (double)used / totalHeapSize;
+        for (auto& [a, b] : blocks) if (!b.free) used += b.requested;
+        return double(used) / double(total);
     }
-
-    // ==========================
-    // FRAGMENTATION
-    // ==========================
-    double fragmentation() {
+    double internalFragmentation() const {  // share of allocated bytes lost to alignment/unsplit tails
+        size_t alloc = 0, wasted = 0;
+        for (auto& [a, b] : blocks) if (!b.free) { alloc += b.size; wasted += b.size - b.requested; }
+        return alloc ? double(wasted) / double(alloc) : 0.0;
+    }
+    double externalFragmentation() const {  // 1 - largest free block / all free memory
         size_t freeTotal = 0, largest = 0;
-
-        for (auto &b : blocks) {
-            if (b.free) {
-                freeTotal += b.size;
-                largest = max(largest, b.size);
-            }
-        }
-
-        if (freeTotal == 0) return 0;
-        return 1.0 - ((double)largest / freeTotal);
+        for (auto& [a, b] : blocks) if (b.free) { freeTotal += b.size; largest = max(largest, b.size); }
+        return freeTotal ? 1.0 - double(largest) / double(freeTotal) : 0.0;
     }
+    size_t blockCount() const { return blocks.size(); }
+    const map<size_t, Block>& layout() const { return blocks; }
 
-
-// -----------------------------
-// INTERNAL FRAGMENTATION
-// -----------------------------
-double internalFragmentation() {
-    size_t wasted = 0;
-
-    for (auto &b : blocks) {
-        if (!b.free) {
-            // assume allocation granularity (request rounding effect)
-            size_t allocated_unit = 256;
-            if (b.size < allocated_unit) {
-                wasted += (allocated_unit - b.size);
-            }
+    // Invariants: blocks tile the heap exactly, no two free blocks touch, free lists match.
+    void check() const {
+        size_t expect = 0, freeIndexed = 0, freeBlocks = 0;
+        bool prevFree = false;
+        for (auto& [addr, b] : blocks) {
+            assert(addr == expect && b.size > 0 && b.size % ALIGN == 0);
+            assert(!(b.free && prevFree));
+            if (b.free) freeBlocks++;
+            expect += b.size;
+            prevFree = b.free;
         }
-    }
-
-    if (totalHeapSize == 0) return 0;
-    return (double)wasted / totalHeapSize;
-}
-
-// -----------------------------
-// EXTERNAL FRAGMENTATION
-// -----------------------------
-double externalFragmentation() {
-    size_t freeTotal = 0;
-    size_t largestFree = 0;
-
-    for (auto &b : blocks) {
-        if (b.free) {
-            freeTotal += b.size;
-            if (b.size > largestFree)
-                largestFree = b.size;
-        }
-    }
-
-    if (freeTotal == 0) return 0;
-
-    return 1.0 - ((double)largestFree / freeTotal);
-}
-
-    // ==========================
-    // FIRST FIT
-    // ==========================
-    int firstFit(size_t size) {
-        for (size_t i = 0; i < blocks.size(); i++) {
-            if (blocks[i].free && blocks[i].size >= size) {
-
-                size_t rem = blocks[i].size - size;
-                blocks[i] = {size, false, nextId++};
-
-                if (rem > 0)
-                    blocks.insert(blocks.begin() + i + 1, {rem, true, 0});
-
-                coalesce();  // improvement
-                return blocks[i].id;
-            }
-        }
-        return -1;
-    }
-
-    // ==========================
-    // BEST FIT
-    // ==========================
-    int bestFit(size_t size) {
-        int best = -1;
-
-        for (size_t i = 0; i < blocks.size(); i++) {
-            if (blocks[i].free && blocks[i].size >= size) {
-                if (best == -1 || blocks[i].size < blocks[best].size)
-                    best = i;
-            }
-        }
-
-        if (best == -1) return -1;
-
-        size_t rem = blocks[best].size - size;
-        blocks[best] = {size, false, nextId++};
-
-        if (rem > 0)
-            blocks.insert(blocks.begin() + best + 1, {rem, true, 0});
-
-        coalesce();
-        return blocks[best].id;
-    }
-
-    // ==========================
-    // SEGREGATED FIT (IMPROVED)
-    // ==========================
-    int segregatedFit(size_t size) {
-        // simple class buckets
-        size_t threshold1 = 32;
-        size_t threshold2 = 128;
-
-        for (size_t i = 0; i < blocks.size(); i++) {
-            if (!blocks[i].free) continue;
-
-            if ((size <= threshold1 && blocks[i].size >= size) ||
-                (size <= threshold2 && blocks[i].size >= size) ||
-                (blocks[i].size >= size)) {
-
-                size_t rem = blocks[i].size - size;
-                blocks[i] = {size, false, nextId++};
-
-                if (rem > 0)
-                    blocks.insert(blocks.begin() + i + 1, {rem, true, 0});
-
-                coalesce();
-                return blocks[i].id;
-            }
-        }
-        return -1;
+        assert(expect == total);
+        for (auto& l : freeLists) freeIndexed += l.size();
+        assert(freeIndexed == freeBlocks);
+        (void)freeIndexed; (void)freeBlocks;
     }
 };
 
-// ==============================
-// REAL malloc/free BENCHMARK
-// ==============================
-double benchmarkMalloc(int ops) {
-    auto start = chrono::high_resolution_clock::now();
+// One step of the workload: allocate `size` bytes, or free the allocation made at step `target`.
+struct Op { bool alloc; size_t size; size_t target; };
 
-    vector<void*> ptrs;
-    ptrs.reserve(ops);
-
-    for (int i = 0; i < ops; i++) {
-        void* p = malloc((rand() % 256) + 1);
-        if (p) ptrs.push_back(p);
+// Mixed workload: mostly small requests with occasional large ones, ~40% frees of live blocks.
+vector<Op> makeWorkload(size_t count, unsigned seed) {
+    mt19937 rng(seed);
+    uniform_real_distribution<double> coin(0, 1);
+    uniform_int_distribution<size_t> small(1, 256), large(257, 16384);
+    vector<Op> ops;
+    vector<size_t> liveSteps;
+    ops.reserve(count);
+    for (size_t i = 0; i < count; i++) {
+        if (!liveSteps.empty() && coin(rng) < 0.4) {
+            size_t pick = uniform_int_distribution<size_t>(0, liveSteps.size() - 1)(rng);
+            ops.push_back({false, 0, liveSteps[pick]});
+            liveSteps[pick] = liveSteps.back();
+            liveSteps.pop_back();
+        } else {
+            ops.push_back({true, coin(rng) < 0.9 ? small(rng) : large(rng), 0});
+            liveSteps.push_back(i);
+        }
     }
-
-    for (void* p : ptrs)
-        free(p);
-
-    auto end = chrono::high_resolution_clock::now();
-
-    return chrono::duration<double, milli>(end - start).count();
+    return ops;
 }
 
-// ==============================
-// TERMINAL REPORT
-// ==============================
-void printReport(int strategy,
-                 double customTime,
-                 double mallocTime,
-                 double util,
-                 double frag) {
+struct Result { string name; double ms; double util, extFrag, intFrag; size_t failed, blocks; Heap heap; };
 
-    string name = (strategy == 1) ? "First Fit"
-                  : (strategy == 2) ? "Best Fit"
-                  : "Segregated Fit";
-
-    cout << "\n==============================\n";
-    cout << "   OS MEMORY ENGINE REPORT\n";
-    cout << "==============================\n\n";
-
-    cout << "Strategy Used: " << name << "\n";
-    cout << "Custom Allocator Time : " << customTime << " ms\n";
-    cout << "malloc/free Time      : " << mallocTime << " ms\n";
-    cout << "Utilization           : " << util * 100 << " %\n";
-    cout << "Fragmentation         : " << frag * 100 << " %\n";
-
-    cout << "\nResult: ";
-    cout << ((customTime < mallocTime)
-            ? "Custom allocator faster"
-            : "malloc/free faster");
-
-    cout << "\n==============================\n\n";
+Result runStrategy(Strategy s, const string& name, size_t heapBytes, const vector<Op>& ops) {
+    Heap heap(heapBytes);
+    vector<int> idAtStep(ops.size(), -1);
+    size_t failed = 0;
+    auto start = chrono::steady_clock::now();
+    for (size_t i = 0; i < ops.size(); i++) {
+        if (ops[i].alloc) { idAtStep[i] = heap.allocate(ops[i].size, s); if (idAtStep[i] < 0) failed++; }
+        else heap.release(idAtStep[ops[i].target]);
+    }
+    double ms = chrono::duration<double, milli>(chrono::steady_clock::now() - start).count();
+    return {name, ms, heap.utilization(), heap.externalFragmentation(), heap.internalFragmentation(),
+            failed, heap.blockCount(), heap};
 }
 
-// ==============================
-// MAIN
-// ==============================
-int main() {
-    srand(time(0));
+double runMalloc(const vector<Op>& ops) {
+    vector<void*> ptrAtStep(ops.size(), nullptr);
+    auto start = chrono::steady_clock::now();
+    for (size_t i = 0; i < ops.size(); i++) {
+        if (ops[i].alloc) ptrAtStep[i] = malloc(ops[i].size);
+        else { free(ptrAtStep[ops[i].target]); ptrAtStep[ops[i].target] = nullptr; }
+    }
+    double ms = chrono::duration<double, milli>(chrono::steady_clock::now() - start).count();
+    for (void* p : ptrAtStep) free(p);  // release whatever the workload left allocated
+    return ms;
+}
 
-    size_t heapSize;
-    int strategy, ops;
+void writeJson(const string& dir, size_t heapMb, size_t opCount, unsigned seed,
+               const vector<Result>& results, double mallocMs) {
+    filesystem::create_directories(dir);
+    ofstream out(dir + "/results.json");
+    out << "{\n  \"heap_mb\": " << heapMb << ", \"operations\": " << opCount << ", \"seed\": " << seed
+        << ",\n  \"malloc_time_ms\": " << mallocMs << ",\n  \"strategies\": [\n";
+    for (size_t i = 0; i < results.size(); i++) {
+        const Result& r = results[i];
+        out << "    {\"name\": \"" << r.name << "\", \"time_ms\": " << r.ms << ", \"utilization\": " << r.util
+            << ", \"external_frag\": " << r.extFrag << ", \"internal_frag\": " << r.intFrag
+            << ", \"failed_allocs\": " << r.failed << ", \"blocks\": " << r.blocks << ",\n     \"layout\": [";
+        bool first = true;
+        for (auto& [addr, b] : r.heap.layout()) {
+            out << (first ? "" : ",") << "[" << addr << "," << b.size << "," << (b.free ? 0 : 1) << "]";
+            first = false;
+        }
+        out << "]}" << (i + 1 < results.size() ? "," : "") << "\n";
+    }
+    out << "  ]\n}\n";
+    if (!out) { cerr << "error: could not write " << dir << "/results.json\n"; exit(1); }
+}
 
-    cout << "Enter heap size (MB): ";
-    cin >> heapSize;
+int selfTest() {
+    for (auto& [s, name] : STRATEGIES) {
+        Heap h(1 << 20);
+        vector<Op> ops = makeWorkload(20000, 7);
+        vector<int> ids(ops.size(), -1);
+        for (size_t i = 0; i < ops.size(); i++) {
+            if (ops[i].alloc) ids[i] = h.allocate(ops[i].size, s); else h.release(ids[ops[i].target]);
+            if (i % 997 == 0) h.check();
+        }
+        for (int id : ids) h.release(id);
+        h.check();
+        assert(h.blockCount() == 1 && h.utilization() == 0.0);  // everything coalesced back
+        Heap tiny(64);
+        assert(tiny.allocate(100, s) == -1);                   // too large fails cleanly
+        assert(tiny.allocate(0, s) == -1);
+        cout << "ok  " << name << "\n";
+    }
+    assert(alignUp(1) == 8 && alignUp(8) == 8 && alignUp(9) == 16);
+    cout << "self-test passed\n";
+    return 0;
+}
 
-    cout << "Select strategy (1=First, 2=Best, 3=Segregated): ";
-    cin >> strategy;
+void usage() {
+    cerr << "usage: allocator [--heap MB] [--ops N] [--seed S] [--out DIR] [--self-test]\n"
+            "  defaults: --heap 10 --ops 50000 --seed 42 --out data\n";
+}
 
-    cout << "Number of operations: ";
-    cin >> ops;
-
-    Heap heap(heapSize);
-
-    auto start = chrono::high_resolution_clock::now();
-
-    for (int i = 0; i < ops; i++) {
-        size_t size = (rand() % 256) + 1;
-
-        if (strategy == 1)
-            heap.firstFit(size);
-        else if (strategy == 2)
-            heap.bestFit(size);
-        else
-            heap.segregatedFit(size);
+int main(int argc, char** argv) {
+    size_t heapMb = 10, opCount = 50000;
+    unsigned seed = 42;
+    string outDir = "data";
+    for (int i = 1; i < argc; i++) {
+        string a = argv[i];
+        if (a == "--self-test") return selfTest();
+        if (a == "-h" || a == "--help") { usage(); return 0; }
+        if (i + 1 >= argc) { usage(); return 2; }
+        string v = argv[++i];
+        try {
+            if (v.empty() || v[0] == '-') throw invalid_argument(v);
+            if (a == "--heap") heapMb = stoul(v);
+            else if (a == "--ops") opCount = stoul(v);
+            else if (a == "--seed") seed = unsigned(stoul(v));
+            else if (a == "--out") outDir = v;
+            else { usage(); return 2; }
+        } catch (const exception&) { cerr << "error: invalid value for " << a << ": " << v << "\n"; return 2; }
+    }
+    if (heapMb < 1 || heapMb > 4096 || opCount < 1 || opCount > 10000000) {
+        cerr << "error: --heap must be 1-4096 MB and --ops 1-10000000\n";
+        return 2;
     }
 
-    auto end = chrono::high_resolution_clock::now();
+    vector<Op> ops = makeWorkload(opCount, seed);
+    vector<Result> results;
+    for (auto& [s, name] : STRATEGIES) results.push_back(runStrategy(s, name, heapMb << 20, ops));
+    double mallocMs = runMalloc(ops);
+    writeJson(outDir, heapMb, opCount, seed, results, mallocMs);
 
-    double customTime =
-        chrono::duration<double, milli>(end - start).count();
-
-    double mallocTime = benchmarkMalloc(ops);
-
-    
-    double frag = heap.fragmentation();
-    double util = heap.utilization();
-    double exFrag = heap.externalFragmentation();
-    double intFrag = heap.internalFragmentation();
-    // ==========================
-    // JSON OUTPUT (DO NOT CHANGE)
-    // ==========================
-    ofstream out("data/results.json", ios::app);
-
-     
-
-out << "{"
-    << "\"strategy\":" << strategy << ","
-    << "\"custom_time\":" << customTime << ","
-    << "\"malloc_time\":" << mallocTime << ","
-    << "\"utilization\":" << util << ","
-    << "\"external_frag\":" << exFrag << ","
-    << "\"internal_frag\":" << intFrag
-    << "}\n";
-
-    out.close();
-
-    // ==========================
-    // TERMINAL OUTPUT
-    // ==========================
-    printReport(strategy, customTime, mallocTime, util, frag);
-
+    printf("\nOS Memory Engine  |  heap %zu MB  |  %zu operations  |  seed %u\n\n", heapMb, opCount, seed);
+    printf("%-15s %10s %8s %10s %10s %8s\n", "Strategy", "Time (ms)", "Util", "Ext frag", "Int frag", "Failed");
+    for (auto& r : results)
+        printf("%-15s %10.2f %7.1f%% %9.1f%% %9.1f%% %8zu\n", r.name.c_str(), r.ms, r.util * 100,
+               r.extFrag * 100, r.intFrag * 100, r.failed);
+    printf("%-15s %10.2f\n\nWrote %s/results.json\n", "malloc/free", mallocMs, outDir.c_str());
     return 0;
 }
